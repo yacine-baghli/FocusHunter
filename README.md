@@ -10,9 +10,47 @@ The challenge score starts at 3,000 points per case. The penalties are 200 point
 
 ## Search strategy
 
-1. **Scan forward with adaptive steps.** Estimate the background sharpness and noise from the readings so far. Use wider steps in low-signal regions and tighten the spacing on a promising rise.
-2. **Look for a supported peak.** Switch to consecutive readings near a credible rise or run a short probe for a narrow peak. The stopping rules use the peak’s prominence, width, and the decline after it to reduce the influence of isolated spikes.
-3. **Refine and park.** When further refinement is needed, inspect a small set of candidate intervals in descending position order to limit reversals. Reserve a query to return to the sharpest position measured and cap the search at 199 calls.
+The flowchart follows a valid lens range from the first reading to the final motor position. Each `RunMotor` call updates the current position, query count, and best reading seen so far.
+
+```mermaid
+flowchart TB
+    accTitle: FocusHunter autofocus search
+    accDescr: The search samples forward, then uses a dense scan, narrow-peak probe, or local refinement before parking at the best measured position.
+
+    Start(["FindPeak(length)"]) --> ReadZero["Read position 0"]
+    ReadZero --> Scan["Adaptive forward scan<br/>Size steps to signal and budget"]
+    Scan --> Evidence{"What does the scan show?"}
+
+    Evidence -->|Sustained rise| Dense["Dense scan<br/>Read one position at a time"]
+    Evidence -->|Stop rule or scan limit| Refine["Local refinement<br/>Check up to 3 intervals from right to left"]
+    Evidence -->|Sharp jump| Probe["Narrow-peak probe<br/>Read up to 16 more positions"]
+    Evidence -->|Keep scanning| Scan
+
+    Dense -->|Peak confirmed| Backfill["Check the entry gap<br/>if the best reading is near entry"]
+    Dense -->|Scan limit| Park
+    Backfill --> Park
+    Probe -->|Peak confirmed| Park
+    Probe -->|Inconclusive| Scan
+    Refine --> Park
+    Park["Move to the best measured position if needed"] --> Done(["Return 0"])
+
+    classDef endpoint fill:#143552,stroke:#39739e,color:#ffffff,stroke-width:1.5px;
+    classDef action fill:#eaf3fb,stroke:#5983a7,color:#162f44;
+    classDef decision fill:#fff1d4,stroke:#a36b17,color:#52370d;
+    classDef result fill:#e6f4ec,stroke:#418665,color:#153f2b;
+    class Start,Done endpoint;
+    class ReadZero,Scan,Dense,Probe,Refine,Backfill action;
+    class Evidence decision;
+    class Park result;
+```
+
+| Stage | How the solver decides |
+| --- | --- |
+| Adaptive scan | Estimate background sharpness and noise from the samples. Widen the steps in low-signal regions and tighten them on a promising rise. In coarse mode, the remaining distance and query budget can force a larger step. |
+| Dense scan | Switch to single-position steps when the rise is sustained, prominent above noise, and estimated to be close to its peak. After confirmation, inspect skipped positions immediately before the entry point if the best reading is at or before that point, or only slightly higher a few positions past it. |
+| Narrow-peak probe | Test an abrupt jump with up to 16 additional readings. Confirm the peak only when enough neighboring readings support it and the signal falls back toward the background. |
+| Coarse stop and refinement | Use peak prominence, width, and the decline after it to decide when to stop advancing. Rank up to three candidate intervals and inspect the previously unread positions in the intervals that fit the remaining budget. |
+| Final position | End the forward scan at the last position or after 198 calls if it hasn’t stopped earlier. Reserve one query for parking and cap the full search at 199 calls. Among equal readings, prefer the position closest to the center of the range, then the lower index. |
 
 The search is heuristic. A stronger peak beyond the observed region can be missed when the evidence favors stopping early.
 
